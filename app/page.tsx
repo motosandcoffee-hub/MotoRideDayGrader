@@ -1,11 +1,386 @@
 "use client";
 
-import type React from "react";
-import { useEffect, useMemo, useState } from "react";
-import { buildDayResults, gradeTone } from "@/lib/scoring";
-import { DEFAULT_LOCATION, DEFAULT_SETTINGS, geocodeLocation } from "@/lib/weather";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  LocateFixed,
+  MapPin,
+  RefreshCw,
+} from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import DayCard from "@/components/day-card";
+
+const DEFAULT_LOCATION = {
+  name: "Delta, BC",
+  latitude: 49.0847,
+  longitude: -123.0586,
+  timezone: "America/Vancouver",
+};
+
+const DEFAULT_SETTINGS = {
+  weekdayMorningStart: 7,
+  weekdayMorningEnd: 9,
+  weekdayEveningStart: 17,
+  weekdayEveningEnd: 18,
+  weekendMorningStart: 9,
+  weekendMorningEnd: 12,
+  weekendMiddayStart: 12,
+  weekendMiddayEnd: 16,
+  weekendLateStart: 16,
+  weekendLateEnd: 19,
+  briefingHour: 7,
+  briefingMinute: 0,
+  savedLocation: DEFAULT_LOCATION,
+};
 
 const STORAGE_KEY = "ride-day-grader-settings-v1";
+
+const CANADIAN_PROVINCE_MAP: Record<string, string> = {
+  AB: "Alberta",
+  BC: "British Columbia",
+  MB: "Manitoba",
+  NB: "New Brunswick",
+  NL: "Newfoundland and Labrador",
+  NS: "Nova Scotia",
+  NT: "Northwest Territories",
+  NU: "Nunavut",
+  ON: "Ontario",
+  PE: "Prince Edward Island",
+  QC: "Quebec",
+  SK: "Saskatchewan",
+  YT: "Yukon",
+};
+
+const FORECAST_DAYS = 7;
+const WIND_ALERT_BBOX_PAD = 0.35;
+
+const GRADE_STEPS = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"];
+const GRADE_INDEX = Object.fromEntries(GRADE_STEPS.map((grade, index) => [grade, index]));
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function shiftGrade(grade: string, halfSteps: number) {
+  const current = GRADE_INDEX[grade as keyof typeof GRADE_INDEX] ?? 0;
+  const next = clamp(current + halfSteps, 0, GRADE_STEPS.length - 1);
+  return GRADE_STEPS[next];
+}
+
+function averageGrades(grades: string[]) {
+  const valid = grades.filter((g) => g in GRADE_INDEX);
+  if (!valid.length) return "F";
+  const avg =
+    valid.reduce((sum, grade) => sum + (GRADE_INDEX[grade as keyof typeof GRADE_INDEX] ?? 0), 0) /
+    valid.length;
+  return GRADE_STEPS[Math.round(avg)];
+}
+
+function getLocalDateKey(time: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(time));
+
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function getLocalHour(time: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(time));
+  return Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+}
+
+function formatDisplayDate(dateStr: string, timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(`${dateStr}T12:00:00`));
+}
+
+function formatTime(hour: number, timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(`2026-01-01T${String(hour).padStart(2, "0")}:00:00`));
+}
+
+function isWeekend(dateStr: string) {
+  const day = new Date(`${dateStr}T12:00:00`).getDay();
+  return day === 0 || day === 6;
+}
+
+function getRideWindows(dateStr: string, settings: typeof DEFAULT_SETTINGS) {
+  if (isWeekend(dateStr)) {
+    return [
+      {
+        key: "late-morning",
+        label: "Late morning",
+        startHour: settings.weekendMorningStart,
+        endHour: settings.weekendMorningEnd,
+      },
+      {
+        key: "midday",
+        label: "Midday",
+        startHour: settings.weekendMiddayStart,
+        endHour: settings.weekendMiddayEnd,
+      },
+      {
+        key: "late-day",
+        label: "Late day",
+        startHour: settings.weekendLateStart,
+        endHour: settings.weekendLateEnd,
+      },
+    ];
+  }
+
+  return [
+    {
+      key: "am",
+      label: "AM commute",
+      startHour: settings.weekdayMorningStart,
+      endHour: settings.weekdayMorningEnd,
+    },
+    {
+      key: "pm",
+      label: "PM commute",
+      startHour: settings.weekdayEveningStart,
+      endHour: settings.weekdayEveningEnd,
+    },
+  ];
+}
+
+function precipitationBand(mm: number) {
+  if (mm <= 0.05) return 0;
+  if (mm <= 0.6) return 1;
+  if (mm <= 3) return 2;
+  return 3;
+}
+
+function precipitationGrade(mm: number, hasSnow: boolean) {
+  if (hasSnow) return "F";
+  if (mm <= 0.05) return "A";
+  if (mm <= 0.6) return "B";
+  if (mm <= 3) return "C";
+  return "D";
+}
+
+function temperatureBand(tempC: number) {
+  if (tempC < 5) return 0;
+  if (tempC <= 9) return 1;
+  if (tempC <= 19) return 2;
+  if (tempC <= 30) return 3;
+  return 4;
+}
+
+function temperatureGrade(tempC: number) {
+  if (tempC > 30) return "B";
+  if (tempC >= 20) return "A";
+  if (tempC >= 10) return "B";
+  if (tempC >= 5) return "C";
+  return "D";
+}
+
+function adjustPrecipitationGrade(
+  dayGrade: string,
+  dayMmPerHour: number,
+  windowMmPerHour: number,
+  hasSnow: boolean
+) {
+  if (hasSnow) return "F";
+  const baseBand = precipitationBand(dayMmPerHour);
+  const windowBand = precipitationBand(windowMmPerHour);
+  if (windowBand < baseBand) return shiftGrade(dayGrade, 1);
+  if (windowBand > baseBand) return shiftGrade(dayGrade, -1);
+  return dayGrade;
+}
+
+function adjustTemperatureGrade(dayGrade: string, baselineTemp: number, windowTemp: number) {
+  const baseBand = temperatureBand(baselineTemp);
+  const windowBand = temperatureBand(windowTemp);
+  if (windowBand > baseBand) return shiftGrade(dayGrade, 1);
+  if (windowBand < baseBand) return shiftGrade(dayGrade, -1);
+  return dayGrade;
+}
+
+function buildHourlyRows(forecast: any) {
+  return forecast.hourly.time.map((time: string, index: number) => ({
+    time,
+    dateKey: getLocalDateKey(time, forecast.timezone),
+    hour: getLocalHour(time, forecast.timezone),
+    temperature_2m: forecast.hourly.temperature_2m?.[index] ?? 0,
+    precipitation: forecast.hourly.precipitation?.[index] ?? 0,
+    snowfall: forecast.hourly.snowfall?.[index] ?? 0,
+    relative_humidity_2m: forecast.hourly.relative_humidity_2m?.[index] ?? 0,
+    is_day: forecast.hourly.is_day?.[index] ?? 1,
+  }));
+}
+
+function buildDailyRows(forecast: any) {
+  return forecast.daily.time.map((dateStr: string, index: number) => ({
+    dateStr,
+    temperatureMin: forecast.daily.temperature_2m_min?.[index] ?? 0,
+    temperatureMax: forecast.daily.temperature_2m_max?.[index] ?? 0,
+    precipitationSum: forecast.daily.precipitation_sum?.[index] ?? 0,
+    snowfallSum: forecast.daily.snowfall_sum?.[index] ?? 0,
+  }));
+}
+
+function groupByDate(rows: any[]) {
+  const map = new Map<string, any[]>();
+  for (const row of rows) {
+    if (!map.has(row.dateKey)) map.set(row.dateKey, []);
+    map.get(row.dateKey)!.push(row);
+  }
+  return map;
+}
+
+function getPreviousDateKey(dateStr: string) {
+  const d = new Date(`${dateStr}T12:00:00`);
+  d.setDate(d.getDate() - 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getOvernightRows(byDate: Map<string, any[]>, dateStr: string) {
+  const previousDay = byDate.get(getPreviousDateKey(dateStr)) ?? [];
+  const currentDay = byDate.get(dateStr) ?? [];
+  return [
+    ...previousDay.filter((row) => row.hour >= 21),
+    ...currentDay.filter((row) => row.hour <= 7),
+  ];
+}
+
+function inferSurfaceHazardRisk(overnightRows: any[], morningRows: any[] = []) {
+  if (!overnightRows.length && !morningRows.length) {
+    return {
+      likely: false,
+      confidence: "low",
+      reasons: ["insufficient overnight forecast detail"],
+      iceLikely: false,
+      saltLikely: false,
+    };
+  }
+
+  const relevantRows = [...overnightRows, ...morningRows];
+  const minTemp = Math.min(...relevantRows.map((r) => r.temperature_2m));
+  const maxTemp = Math.max(...relevantRows.map((r) => r.temperature_2m));
+  const totalPrecip = relevantRows.reduce((sum, r) => sum + (r.precipitation ?? 0), 0);
+  const maxHumidity = Math.max(...relevantRows.map((r) => r.relative_humidity_2m ?? 0));
+  const snowPresent = relevantRows.some((r) => (r.snowfall ?? 0) > 0);
+  const freezing = minTemp <= 0;
+  const thawRefreezeBand = minTemp <= 0 && maxTemp >= 1;
+  const strongMoistureSignal = totalPrecip >= 0.2 || maxHumidity >= 90 || snowPresent;
+  const moderateMoistureSignal = totalPrecip >= 0.05 || maxHumidity >= 85;
+  const moisturePresent = strongMoistureSignal || moderateMoistureSignal;
+  const iceLikely = freezing && moisturePresent;
+  const saltLikely = freezing && (strongMoistureSignal || snowPresent || thawRefreezeBand);
+
+  let confidence = "low";
+  if ((iceLikely || saltLikely) && (strongMoistureSignal || snowPresent)) confidence = "high";
+  else if (iceLikely || saltLikely) confidence = "medium";
+
+  return {
+    likely: iceLikely || saltLikely,
+    confidence,
+    iceLikely,
+    saltLikely,
+    reasons: [
+      freezing ? `surface temperature window reaches ${minTemp.toFixed(1)}°C` : null,
+      thawRefreezeBand ? "freeze-thaw pattern could leave slick surfaces" : null,
+      totalPrecip >= 0.05 ? `${totalPrecip.toFixed(1)} mm recent precipitation` : null,
+      maxHumidity >= 85 ? `${Math.round(maxHumidity)}% peak humidity` : null,
+      snowPresent ? "snow signal present" : null,
+      iceLikely ? "icy road risk likely" : null,
+      saltLikely ? "road salt likely" : null,
+    ].filter(Boolean),
+  };
+}
+
+function summarizeAlertFeature(feature: any) {
+  const properties = feature.properties ?? {};
+  return {
+    title: properties.event || properties.title || "Weather alert",
+    description: properties.description || properties.headline || properties.instruction || "",
+    severity: properties.severity || "unknown",
+  };
+}
+
+function isWindWarning(alert: any) {
+  const haystack = `${alert.title} ${alert.description}`.toLowerCase();
+  return (
+    haystack.includes("wind warning") ||
+    haystack.includes("high wind") ||
+    haystack.includes("damaging wind")
+  );
+}
+
+function getWindowRows(rows: any[], startHour: number, endHour: number) {
+  return rows.filter((row) => row.hour >= startHour && row.hour <= endHour);
+}
+
+function applyPenalties(
+  baseGrade: string,
+  {
+    windWarning,
+    darkness,
+    surfaceHazardLikely,
+  }: { windWarning: boolean; darkness: boolean; surfaceHazardLikely: boolean }
+) {
+  let grade = baseGrade;
+  const penalties: string[] = [];
+
+  if (darkness) {
+    grade = shiftGrade(grade, -2);
+    penalties.push("darkness");
+  }
+
+  if (windWarning) {
+    grade = shiftGrade(grade, -2);
+    penalties.push("wind warning");
+  }
+
+  if (surfaceHazardLikely) {
+    grade = "F";
+    penalties.push("ice / salt risk");
+  }
+
+  return { grade, penalties };
+}
+
+function summarizeDay(overallGrade: string) {
+  if (["A+", "A", "A-"].includes(overallGrade)) return "Excellent riding conditions";
+  if (["B+", "B", "B-"].includes(overallGrade)) return "Good riding conditions with minor compromises";
+  if (["C+", "C", "C-"].includes(overallGrade)) return "Rideable, but notably compromised";
+  if (["D+", "D"].includes(overallGrade)) return "Poor riding day";
+  return "Avoid riding";
+}
+
+function gradeTone(grade: string) {
+  if (["A+", "A", "A-"].includes(grade)) return "default";
+  if (["B+", "B", "B-"].includes(grade)) return "secondary";
+  if (["C+", "C", "C-", "D+", "D"].includes(grade)) return "outline";
+  return "destructive";
+}
 
 function readStoredSettings() {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
@@ -23,170 +398,17 @@ function persistSettings(nextSettings: typeof DEFAULT_SETTINGS) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSettings));
 }
 
-function DetailsCard({
-  title,
-  subtitle,
-  children
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <details className="cardish bottom-spacing">
-      <summary>
-        <div className="summary-title">{title}</div>
-        <div className="muted spacer-4">{subtitle}</div>
-      </summary>
-      <div className="details-body">{children}</div>
-    </details>
-  );
-}
-
-function GradeBadge({ grade, label }: { grade: string; label?: string }) {
-  const tone = gradeTone(grade as any);
-  return <span className={`badge ${tone}`}>{label ?? grade}</span>;
-}
-
-function TodayCard({ today }: { today: any | null }) {
-  return (
-    <div className="card">
-      <div className="card-inner">
-        <h2 style={{ fontSize: 28 }}>Today at a glance</h2>
-        <p className="muted spacer-8">{today ? "Your nearest-term ride decision" : "Loading ride outlook"}</p>
-
-        {today ? (
-          <div className="spacer-16">
-            <div className="row space-between wrap">
-              <div>
-                <div className="muted">{today.label}</div>
-                <div className="big-grade">{today.overallGrade}</div>
-              </div>
-              <GradeBadge grade={today.overallGrade} label={today.summary} />
-            </div>
-
-            {today.surfaceHazardRisk?.likely && (
-              <div className="alert spacer-16">
-                <div className="alert-title">Fail trigger: likely ice or road salt</div>
-                <div>{today.surfaceHazardRisk.reasons.join("; ")}</div>
-              </div>
-            )}
-
-            <div className="section-stack spacer-16">
-              {today.windows.map((window: any) => (
-                <div className="window-card" key={window.key}>
-                  <div className="row space-between wrap">
-                    <div>
-                      <div style={{ fontWeight: 700 }}>{window.label}</div>
-                      <div className="muted spacer-4">{window.timeText}</div>
-                    </div>
-                    <GradeBadge grade={window.grade} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="muted spacer-12">Loading...</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DayCard({ day }: { day: any }) {
-  return (
-    <div className="card">
-      <div className="card-inner">
-        <div className="row space-between wrap">
-          <div>
-            <h2 style={{ fontSize: 28 }}>{day.label}</h2>
-            <p className="muted spacer-4">{day.summary}</p>
-          </div>
-          <div className="row wrap">
-            <GradeBadge grade={day.overallGrade} label={`Overall ${day.overallGrade}`} />
-            {day.snowLikely && <span className="badge bad">Snow fail</span>}
-          </div>
-        </div>
-
-        <div className="window-grid spacer-20">
-          {day.windows.map((window: any) => (
-            <div className="window-card" key={window.key}>
-              <div className="row space-between wrap">
-                <div>
-                  <div style={{ fontWeight: 700 }}>{window.label}</div>
-                  <div className="muted spacer-4">{window.timeText}</div>
-                </div>
-                <GradeBadge grade={window.grade} />
-              </div>
-
-              <div className="sub-grid spacer-12">
-                <div className="sub-box">
-                  <div className="muted">Precipitation</div>
-                  <div className="spacer-4" style={{ fontWeight: 700 }}>{window.precipGrade}</div>
-                  <div className="muted spacer-4">{window.precipSummary}</div>
-                </div>
-                <div className="sub-box">
-                  <div className="muted">Temperature</div>
-                  <div className="spacer-4" style={{ fontWeight: 700 }}>{window.tempGrade}</div>
-                  <div className="muted spacer-4">{window.tempSummary}</div>
-                </div>
-              </div>
-
-              {window.penalties.length > 0 && (
-                <div className="muted spacer-12">Penalties: {window.penalties.join(", ")}</div>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <hr className="separator spacer-20" />
-
-        <div className="small-grid spacer-20">
-          <div className="metric-card">
-            <div className="title">Daily precipitation</div>
-            <div className="value">{day.dailyPrecip.toFixed(1)} mm</div>
-            <div className="note">{day.snowLikely ? "Snow signal present" : "No snow signal"}</div>
-          </div>
-          <div className="metric-card">
-            <div className="title">Temperature range</div>
-            <div className="value">{day.tempMin.toFixed(0)}° to {day.tempMax.toFixed(0)}°C</div>
-            <div className="note">Baseline {day.baselineTemp.toFixed(1)}°C</div>
-          </div>
-          <div className="metric-card">
-            <div className="title">Wind alerts</div>
-            <div className="value">{day.windWarning ? "Wind warning active" : "No wind warning"}</div>
-            <div className="note">{day.windWarning ? "All ride grades downgraded one letter" : "No alert penalty"}</div>
-          </div>
-          <div className="metric-card">
-            <div className="title">Ice / salt risk</div>
-            <div className="value">{day.surfaceHazardRisk.likely ? "Likely" : "Unlikely"}</div>
-            <div className="note">{day.surfaceHazardRisk.likely ? `${day.surfaceHazardRisk.confidence} confidence` : "No fail trigger"}</div>
-          </div>
-        </div>
-
-        {day.surfaceHazardRisk.likely && (
-          <div className="alert spacer-20">
-            <div className="alert-title">Fail due to likely ice or road salt</div>
-            <div>{day.surfaceHazardRisk.reasons.join("; ")}. This is a conservative forecast-based proxy for hazardous road-surface conditions, not a live municipal operations feed.</div>
-          </div>
-        )}
-
-        {day.alertTitles.length > 0 && (
-          <div className="muted spacer-16">Alerts considered: {day.alertTitles.join(", ")}</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function SettingsPanel({
   settings,
-  onSettingsChange
+  onSettingsChange,
 }: {
   settings: typeof DEFAULT_SETTINGS;
-  onSettingsChange: (value: typeof DEFAULT_SETTINGS) => void;
+  onSettingsChange: React.Dispatch<React.SetStateAction<typeof DEFAULT_SETTINGS>>;
 }) {
+  function updateSetting(key: string, value: string) {
+    onSettingsChange({ ...settings, [key]: Number(value) });
+  }
+
   const fields = [
     ["weekdayMorningStart", "Weekday AM start"],
     ["weekdayMorningEnd", "Weekday AM end"],
@@ -199,63 +421,49 @@ function SettingsPanel({
     ["weekendLateStart", "Weekend late day start"],
     ["weekendLateEnd", "Weekend late day end"],
     ["briefingHour", "Briefing hour"],
-    ["briefingMinute", "Briefing minute"]
-  ] as const;
+    ["briefingMinute", "Briefing minute"],
+  ];
 
   return (
-    <DetailsCard
-      title="Ride windows and preferences"
-      subtitle={`Weekday ${settings.weekdayMorningStart}:00–${settings.weekdayMorningEnd}:00 / ${settings.weekdayEveningStart}:00–${settings.weekdayEveningEnd}:00`}
-    >
-      <div className="settings-grid">
-        {fields.map(([key, label]) => (
-          <div key={key}>
-            <label className="label" htmlFor={key}>{label}</label>
-            <input
-              id={key}
-              type="number"
-              min={0}
-              max={23}
-              step={1}
-              value={settings[key]}
-              onChange={(event) => onSettingsChange({ ...settings, [key]: Number(event.target.value) })}
-            />
+    <details className="rounded-3xl border bg-card shadow-sm">
+      <summary className="cursor-pointer list-none px-6 py-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-2xl font-semibold tracking-tight">Ride windows and preferences</div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              Fine-tune commute windows and daily briefing time.
+            </div>
           </div>
-        ))}
+          <div className="text-sm text-muted-foreground">
+            Weekday {settings.weekdayMorningStart}:00–{settings.weekdayMorningEnd}:00 /{" "}
+            {settings.weekdayEveningStart}:00–{settings.weekdayEveningEnd}:00
+          </div>
+        </div>
+      </summary>
+      <div className="px-6 pb-6">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {fields.map(([key, label]) => (
+            <div key={key} className="space-y-2">
+              <Label htmlFor={key}>{label}</Label>
+              <Input
+                id={key}
+                type="number"
+                min={0}
+                max={23}
+                step={1}
+                value={(settings as any)[key]}
+                onChange={(event) => updateSetting(key, event.target.value)}
+                className="rounded-2xl"
+              />
+            </div>
+          ))}
+        </div>
       </div>
-    </DetailsCard>
+    </details>
   );
 }
 
-function ScoringModelPanel() {
-  return (
-    <DetailsCard
-      title="Scoring model"
-      subtitle="Expand to review the grading and fail-trigger rules."
-    >
-      <div className="small-grid">
-        <div className="metric-card">
-          <div className="title">Precipitation</div>
-          <div className="note">Snow = F. No rain = A. Very light rain = B. Moderate rain = C. Heavy rain = D. Ride-window rain can shift by half a grade.</div>
-        </div>
-        <div className="metric-card">
-          <div className="title">Temperature</div>
-          <div className="note">20–30°C = A. Above 30°C = B. 10–19°C = B. 5–9°C = C. Below 5°C = D. Ride-window temperature can shift by half a grade.</div>
-        </div>
-        <div className="metric-card">
-          <div className="title">Penalties</div>
-          <div className="note">Wind warnings downgrade all ride grades one full letter. Darkness during a ride window downgrades that window one full letter.</div>
-        </div>
-        <div className="metric-card">
-          <div className="title">Road surface fail</div>
-          <div className="note">A conservative fail trigger based on near-freezing or freezing conditions plus precipitation, humidity, snow, or freeze-thaw timing that may indicate ice or road salt risk.</div>
-        </div>
-      </div>
-    </DetailsCard>
-  );
-}
-
-export default function Page() {
+export default function RideDayGraderApp() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [locationQuery, setLocationQuery] = useState(DEFAULT_LOCATION.name);
   const [location, setLocation] = useState(DEFAULT_LOCATION);
@@ -264,21 +472,111 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function loadForecast(nextLocation = location) {
+  async function geocode(search: string) {
+    const raw = search.trim();
+    if (!raw) throw new Error("Enter a city name.");
+
+    const normalized = raw.replace(/\s+/g, " ");
+    const parts = normalized.split(",").map((part) => part.trim()).filter(Boolean);
+    const provinceCode = parts[1] ? parts[1].toUpperCase() : "";
+    const expandedProvince = CANADIAN_PROVINCE_MAP[provinceCode] || parts[1] || "";
+
+    const candidateQueries = [
+      normalized,
+      `${normalized}, Canada`,
+      expandedProvince && parts[0] ? `${parts[0]}, ${expandedProvince}, Canada` : null,
+      parts[0] ? `${parts[0]}, Canada` : null,
+    ].filter((value, index, array) => Boolean(value) && array.indexOf(value) === index) as string[];
+
+    for (const candidate of candidateQueries) {
+      const url =
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(candidate)}` +
+        `&count=10&language=en&format=json`;
+
+      const res = await fetch(url);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const matches = (data.results || []).filter((result: any) => {
+        if (!result.country_code) return true;
+        return result.country_code === "CA" || candidate === normalized;
+      });
+
+      const match = matches[0];
+      if (match) {
+        return {
+          name: [match.name, match.admin1, match.country_code].filter(Boolean).join(", "),
+          latitude: match.latitude,
+          longitude: match.longitude,
+          timezone:
+            match.timezone ||
+            Intl.DateTimeFormat().resolvedOptions().timeZone ||
+            DEFAULT_LOCATION.timezone,
+        };
+      }
+    }
+
+    throw new Error("No matching Canadian city found.");
+  }
+
+  async function fetchForecast(targetLocation: typeof DEFAULT_LOCATION) {
+    const params = new URLSearchParams({
+      latitude: String(targetLocation.latitude),
+      longitude: String(targetLocation.longitude),
+      timezone: targetLocation.timezone,
+      forecast_days: String(FORECAST_DAYS),
+      models: "gem_global",
+      hourly: [
+        "temperature_2m",
+        "precipitation",
+        "snowfall",
+        "relative_humidity_2m",
+        "is_day",
+      ].join(","),
+      daily: [
+        "temperature_2m_min",
+        "temperature_2m_max",
+        "precipitation_sum",
+        "snowfall_sum",
+        "sunrise",
+        "sunset",
+      ].join(","),
+    });
+
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+    if (!res.ok) throw new Error("Forecast request failed.");
+    return await res.json();
+  }
+
+  async function fetchAlerts(targetLocation: typeof DEFAULT_LOCATION) {
+    const bbox = [
+      targetLocation.longitude - WIND_ALERT_BBOX_PAD,
+      targetLocation.latitude - WIND_ALERT_BBOX_PAD,
+      targetLocation.longitude + WIND_ALERT_BBOX_PAD,
+      targetLocation.latitude + WIND_ALERT_BBOX_PAD,
+    ].join(",");
+
+    try {
+      const url = `https://api.weather.gc.ca/collections/weather-alerts/items?lang=en&f=json&limit=50&bbox=${bbox}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.features ?? []).map(summarizeAlertFeature);
+    } catch {
+      return [];
+    }
+  }
+
+  async function refresh(nextLocation = location) {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({
-        name: nextLocation.name,
-        latitude: String(nextLocation.latitude),
-        longitude: String(nextLocation.longitude),
-        timezone: nextLocation.timezone
-      });
-      const res = await fetch(`/api/ride-forecast?${params.toString()}`, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load forecast.");
-      setForecast(data.forecast);
-      setAlerts(data.alerts);
+      const [forecastData, alertData] = await Promise.all([
+        fetchForecast(nextLocation),
+        fetchAlerts(nextLocation),
+      ]);
+      setForecast(forecastData);
+      setAlerts(alertData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load ride forecast.");
     } finally {
@@ -289,37 +587,35 @@ export default function Page() {
   useEffect(() => {
     const stored = readStoredSettings();
     setSettings(stored);
-    const savedLocation = stored.savedLocation || DEFAULT_LOCATION;
-    setLocation(savedLocation);
-    setLocationQuery(savedLocation.name);
-    loadForecast(savedLocation);
+    setLocation(stored.savedLocation || DEFAULT_LOCATION);
+    setLocationQuery((stored.savedLocation || DEFAULT_LOCATION).name);
+    refresh(stored.savedLocation || DEFAULT_LOCATION);
   }, []);
 
   useEffect(() => {
     persistSettings(settings);
   }, [settings]);
 
-  async function handleSearch(event: React.FormEvent) {
+  async function handleSearch(event: any) {
     event.preventDefault();
     setLoading(true);
     setError("");
     try {
-      const nextLocation = await geocodeLocation(locationQuery);
+      const nextLocation = await geocode(locationQuery);
       setLocation(nextLocation);
       setSettings((current) => ({ ...current, savedLocation: nextLocation }));
-      const params = new URLSearchParams({
-        name: nextLocation.name,
-        latitude: String(nextLocation.latitude),
-        longitude: String(nextLocation.longitude),
-        timezone: nextLocation.timezone
-      });
-      const res = await fetch(`/api/ride-forecast?${params.toString()}`, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to load forecast.");
-      setForecast(data.forecast);
-      setAlerts(data.alerts);
+      const [forecastData, alertData] = await Promise.all([
+        fetchForecast(nextLocation),
+        fetchAlerts(nextLocation),
+      ]);
+      setForecast(forecastData);
+      setAlerts(alertData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Location update failed.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Location update failed. Try a Canadian city like Toronto, Vancouver, or Halifax."
+      );
     } finally {
       setLoading(false);
     }
@@ -337,12 +633,13 @@ export default function Page() {
           name: "Current location",
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_LOCATION.timezone
+          timezone:
+            Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_LOCATION.timezone,
         };
         setLocation(nextLocation);
-        setLocationQuery("Current location");
         setSettings((current) => ({ ...current, savedLocation: nextLocation }));
-        await loadForecast(nextLocation);
+        setLocationQuery("Current location");
+        await refresh(nextLocation);
       },
       () => setError("Could not access your location."),
       { enableHighAccuracy: true, timeout: 10000 }
@@ -351,66 +648,261 @@ export default function Page() {
 
   const gradedDays = useMemo(() => {
     if (!forecast?.hourly?.time?.length || !forecast?.daily?.time?.length) return [];
-    return buildDayResults(forecast, alerts, settings);
+
+    const hourlyRows = buildHourlyRows(forecast);
+    const dailyRows = buildDailyRows(forecast);
+    const byDate = groupByDate(hourlyRows);
+    const windAlerts = alerts.filter(isWindWarning);
+    const windWarning = windAlerts.length > 0;
+
+    return dailyRows.map((dailyRow: any) => {
+      const dayRows = byDate.get(dailyRow.dateStr) ?? [];
+      const overnightRows = getOvernightRows(byDate, dailyRow.dateStr);
+      const morningHazardRows = dayRows.filter((row: any) => row.hour <= 9);
+      const surfaceHazardRisk = inferSurfaceHazardRisk(overnightRows, morningHazardRows);
+      const snowLikely = dailyRow.snowfallSum > 0 || dayRows.some((row: any) => row.snowfall > 0);
+      const baselineTemp = (dailyRow.temperatureMin + dailyRow.temperatureMax) / 2;
+      const dayPrecipPerHour = dayRows.length
+        ? dailyRow.precipitationSum / dayRows.length
+        : dailyRow.precipitationSum;
+
+      const windows = getRideWindows(dailyRow.dateStr, settings).map((window) => {
+        const rows = getWindowRows(dayRows, window.startHour, window.endHour);
+        const avgTemp = rows.length
+          ? rows.reduce((sum: number, row: any) => sum + row.temperature_2m, 0) / rows.length
+          : baselineTemp;
+        const totalPrecip = rows.reduce((sum: number, row: any) => sum + row.precipitation, 0);
+        const precipPerHour = rows.length ? totalPrecip / rows.length : dayPrecipPerHour;
+        const windowHasSnow = snowLikely || rows.some((row: any) => row.snowfall > 0);
+
+        const basePrecipGrade = precipitationGrade(dailyRow.precipitationSum, windowHasSnow);
+        const adjustedPrecipGrade = adjustPrecipitationGrade(
+          basePrecipGrade,
+          dayPrecipPerHour,
+          precipPerHour,
+          windowHasSnow
+        );
+
+        const baseTempGrade = temperatureGrade(baselineTemp);
+        const adjustedTempGrade = adjustTemperatureGrade(baseTempGrade, baselineTemp, avgTemp);
+        const baseWindowGrade = averageGrades([adjustedPrecipGrade, adjustedTempGrade]);
+
+        const darkness = rows.some((row: any) => row.is_day !== 1);
+        const penalized = applyPenalties(baseWindowGrade, {
+          windWarning,
+          darkness,
+          surfaceHazardLikely: surfaceHazardRisk.likely,
+        });
+
+        return {
+          key: window.key,
+          label: window.label,
+          grade: windowHasSnow ? "F" : penalized.grade,
+          precipGrade: adjustedPrecipGrade,
+          tempGrade: adjustedTempGrade,
+          avgTemp,
+          totalPrecip,
+          penalties: windowHasSnow ? [...penalized.penalties, "snow"] : penalized.penalties,
+          timeText: `${formatTime(window.startHour, forecast.timezone)}–${formatTime(window.endHour, forecast.timezone)}`,
+          precipSummary: `${totalPrecip.toFixed(1)} mm in window`,
+          tempSummary: `${avgTemp.toFixed(1)}°C average`,
+        };
+      });
+
+      let overallGrade = averageGrades(windows.map((window: any) => window.grade));
+      if (snowLikely || surfaceHazardRisk.likely) overallGrade = "F";
+
+      return {
+        label: formatDisplayDate(dailyRow.dateStr, forecast.timezone),
+        summary: summarizeDay(overallGrade),
+        overallGrade,
+        windows,
+        snowLikely,
+        surfaceHazardRisk,
+        tempMin: dailyRow.temperatureMin,
+        tempMax: dailyRow.temperatureMax,
+        baselineTemp,
+        dailyPrecip: dailyRow.precipitationSum,
+        windWarning,
+        alertTitles: windAlerts.map((alert: any) => alert.title),
+      };
+    });
   }, [forecast, alerts, settings]);
 
   const today = gradedDays[0] ?? null;
 
   return (
-    <main>
-      <div className="container">
-        <div className="grid-top">
-          <div className="card">
-            <div className="card-inner">
-              <div className="iconline muted">
-                <img src="/icon-192.png" alt="Ride Day Grader" width="20" height="20" style={{ borderRadius: 4 }} />
+    <div className="min-h-screen bg-background px-4 py-6 md:px-8 md:py-10">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+          <Card className="rounded-3xl border shadow-sm">
+            <CardHeader className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <MapPin className="h-4 w-4" />
                 {location.name}
               </div>
-
-              <div className="spacer-12">
-                <h1 className="top-title">Ride Day Grader</h1>
-                <p className="muted spacer-8">
-                  A motorcycle-specific forecast app that grades your ride day using precipitation, temperature, daylight, wind alerts, and conservative ice / road-salt risk.
-                </p>
+              <div>
+                <CardTitle className="text-4xl tracking-tight">Ride Day Grader</CardTitle>
+                <CardDescription className="mt-2 max-w-2xl text-base leading-relaxed">
+                  A motorcycle-specific forecast app that grades your ride day using precipitation,
+                  temperature, daylight, wind alerts, and conservative ice / road-salt risk.
+                </CardDescription>
               </div>
-
-              <form className="form-grid spacer-20" onSubmit={handleSearch}>
-                <input
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <form onSubmit={handleSearch} className="grid gap-3 md:grid-cols-[1fr_auto_auto]">
+                <Input
                   value={locationQuery}
                   onChange={(event) => setLocationQuery(event.target.value)}
-                  placeholder="Search location"
+                  placeholder="Search Canadian city"
+                  className="h-11 rounded-2xl"
                 />
-                <button type="submit" disabled={loading}>{loading ? "Loading..." : "Update"}</button>
-                <button type="button" className="secondary" onClick={handleUseMyLocation}>Use my location</button>
+                <Button type="submit" className="h-11 rounded-2xl" disabled={loading}>
+                  {loading ? "Loading..." : "Update"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-2xl"
+                  onClick={handleUseMyLocation}
+                >
+                  <LocateFixed className="mr-2 h-4 w-4" />
+                  Use my location
+                </Button>
               </form>
 
-              <div className="row wrap spacer-16">
-                <span className="muted">{location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}</span>
-                <span className="muted">•</span>
-                <span className="muted">{location.timezone}</span>
-                <button style={{ marginLeft: "auto" }} type="button" className="secondary" onClick={() => loadForecast()} disabled={loading}>Refresh</button>
+              <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <span>{location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}</span>
+                <span>•</span>
+                <span>{location.timezone}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto rounded-2xl"
+                  onClick={() => refresh()}
+                  disabled={loading}
+                >
+                  <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                  Refresh
+                </Button>
               </div>
 
               {error && (
-                <div className="alert spacer-16">
-                  <div className="alert-title">Unable to load forecast</div>
-                  <div>{error}</div>
-                </div>
+                <Alert className="rounded-2xl">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Unable to load forecast</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
               )}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-3xl border shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-2xl">Today at a glance</CardTitle>
+              <CardDescription>
+                {today ? "Your nearest-term ride decision" : "Loading ride outlook"}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {today ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm text-muted-foreground">{today.label}</div>
+                      <div className="text-4xl font-semibold tracking-tight">{today.overallGrade}</div>
+                    </div>
+                    <Badge variant={gradeTone(today.overallGrade)} className="px-3 py-1 text-sm">
+                      {today.summary}
+                    </Badge>
+                  </div>
+
+                  {today.surfaceHazardRisk?.likely && (
+                    <Alert className="rounded-2xl">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Fail trigger: likely ice or road salt</AlertTitle>
+                      <AlertDescription>
+                        {today.surfaceHazardRisk.reasons.join("; ")}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <div className="grid gap-3">
+                    {today.windows.map((window: any) => (
+                      <div
+                        key={window.key}
+                        className="flex items-center justify-between rounded-2xl border p-3"
+                      >
+                        <div>
+                          <div className="font-medium">{window.label}</div>
+                          <div className="text-sm text-muted-foreground">{window.timeText}</div>
+                        </div>
+                        <Badge variant={gradeTone(window.grade)}>{window.grade}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">Loading...</div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-6">
+          {gradedDays.map((day: any) => (
+            <DayCard key={day.label} day={day} timezone={forecast?.timezone || location.timezone} />
+          ))}
+        </div>
+
+        <details className="rounded-3xl border bg-card shadow-sm">
+          <summary className="cursor-pointer list-none px-6 py-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-2xl font-semibold tracking-tight">Scoring model</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Expand to review the grading and fail-trigger rules.
+                </div>
+              </div>
+            </div>
+          </summary>
+          <div className="px-6 pb-6">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 text-sm text-muted-foreground">
+              <div className="rounded-2xl border p-4">
+                <div className="font-medium text-foreground">Precipitation</div>
+                <div className="mt-2">
+                  Snow = F. No rain = A. Very light rain = B. Moderate rain = C. Heavy rain = D.
+                  Commute or ride-window intensity can shift by half a grade.
+                </div>
+              </div>
+              <div className="rounded-2xl border p-4">
+                <div className="font-medium text-foreground">Temperature</div>
+                <div className="mt-2">
+                  20–30°C = A. Above 30°C = B. 10–19°C = B. 5–9°C = C. Below 5°C = D.
+                  Ride-window temperature can shift by half a grade.
+                </div>
+              </div>
+              <div className="rounded-2xl border p-4">
+                <div className="font-medium text-foreground">Penalties</div>
+                <div className="mt-2">
+                  Wind warnings downgrade all ride grades one full letter. Darkness during a ride
+                  window downgrades that window one full letter.
+                </div>
+              </div>
+              <div className="rounded-2xl border p-4">
+                <div className="font-medium text-foreground">Road surface fail</div>
+                <div className="mt-2">
+                  A conservative fail trigger based on near-freezing or freezing conditions plus
+                  precipitation, humidity, snow, or freeze-thaw timing that may indicate ice or
+                  road salt risk.
+                </div>
+              </div>
             </div>
           </div>
+        </details>
 
-          <TodayCard today={today} />
-        </div>
-
-        <div className="section-stack">
-          {gradedDays.map((day: any) => <DayCard key={day.label} day={day} />)}
-          <ScoringModelPanel />
-          <SettingsPanel settings={settings} onSettingsChange={setSettings} />
-        </div>
-
-        <footer>Current source-of-truth package with collapsed scoring model, collapsed preferences, and café-racer icon assets.</footer>
+        <SettingsPanel settings={settings} onSettingsChange={setSettings} />
       </div>
-    </main>
+    </div>
   );
 }
