@@ -1,12 +1,11 @@
 {
-  "name": "ride-day-grader",
-  "version": "0.3.0",
+  "name": "moto-ride-day-grade",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "start": "next start"
   },
   "dependencies": {
     "next": "15.5.10",

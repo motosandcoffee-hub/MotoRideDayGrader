@@ -1,9 +1,10 @@
+import type React from "react";
 import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Ride Day Grader",
-  description: "Simple motorcycle ride-day forecast grader.",
+  description: "Motorcycle-specific ride day grader.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
