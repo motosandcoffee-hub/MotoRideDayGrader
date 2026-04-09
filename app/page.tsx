@@ -3,9 +3,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Cloud,
+  CloudDrizzle,
+  CloudRain,
+  CloudSnow,
+  CloudSun,
   LocateFixed,
   MapPin,
   RefreshCw,
+  Sun,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -13,7 +19,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import DayCard from "@/components/day-card";
 
 const DEFAULT_LOCATION = {
   name: "Delta, BC",
@@ -228,6 +233,7 @@ function buildHourlyRows(forecast: any) {
     temperature_2m: forecast.hourly.temperature_2m?.[index] ?? 0,
     precipitation: forecast.hourly.precipitation?.[index] ?? 0,
     snowfall: forecast.hourly.snowfall?.[index] ?? 0,
+    cloud_cover: forecast.hourly.cloud_cover?.[index] ?? 0,
     relative_humidity_2m: forecast.hourly.relative_humidity_2m?.[index] ?? 0,
     is_day: forecast.hourly.is_day?.[index] ?? 1,
   }));
@@ -382,6 +388,50 @@ function gradeTone(grade: string) {
   return "destructive";
 }
 
+type WeatherIconKey = "sun" | "sun-cloud" | "cloud" | "drizzle" | "rain" | "snow";
+
+function getWeatherIcon(rows: any[]): { key: WeatherIconKey; label: string } {
+  if (!rows.length) return { key: "cloud", label: "Forecast unavailable" };
+
+  const snowfallTotal = rows.reduce((sum, row) => sum + (row.snowfall ?? 0), 0);
+  const precipitationTotal = rows.reduce((sum, row) => sum + (row.precipitation ?? 0), 0);
+  const averageCloudCover =
+    rows.reduce((sum, row) => sum + (row.cloud_cover ?? 0), 0) / rows.length;
+  const hasDaylight = rows.some((row) => row.is_day === 1);
+
+  if (snowfallTotal > 0) return { key: "snow", label: "Snow" };
+  if (precipitationTotal >= 2 || rows.some((row) => (row.precipitation ?? 0) >= 1)) {
+    return { key: "rain", label: "Rain" };
+  }
+  if (precipitationTotal >= 0.1 || rows.some((row) => (row.precipitation ?? 0) > 0.05)) {
+    return { key: "drizzle", label: "Light precipitation" };
+  }
+  if (averageCloudCover >= 70) return { key: "cloud", label: "Cloudy" };
+  if (averageCloudCover >= 35) {
+    return { key: "sun-cloud", label: hasDaylight ? "Partly cloudy" : "Variable cloud" };
+  }
+  return { key: hasDaylight ? "sun" : "cloud", label: hasDaylight ? "Sunny" : "Clear" };
+}
+
+function WeatherIcon({ iconKey, className }: { iconKey: WeatherIconKey; className?: string }) {
+  switch (iconKey) {
+    case "sun":
+      return <Sun className={className} strokeWidth={1.75} />;
+    case "sun-cloud":
+      return <CloudSun className={className} strokeWidth={1.75} />;
+    case "cloud":
+      return <Cloud className={className} strokeWidth={1.75} />;
+    case "drizzle":
+      return <CloudDrizzle className={className} strokeWidth={1.75} />;
+    case "rain":
+      return <CloudRain className={className} strokeWidth={1.75} />;
+    case "snow":
+      return <CloudSnow className={className} strokeWidth={1.75} />;
+    default:
+      return <Cloud className={className} strokeWidth={1.75} />;
+  }
+}
+
 function readStoredSettings() {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
   try {
@@ -463,6 +513,127 @@ function SettingsPanel({
   );
 }
 
+function DayCard({ day }: { day: any }) {
+  return (
+    <details className="rounded-3xl border bg-card shadow-sm">
+      <summary className="cursor-pointer list-none px-6 py-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="rounded-2xl border bg-muted/30 p-3">
+              <WeatherIcon iconKey={day.iconKey} className="h-9 w-9 text-foreground" />
+            </div>
+            <div>
+              <div className="text-2xl font-semibold tracking-tight">{day.label}</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {day.iconLabel} · {day.summary}
+              </div>
+              <div className="mt-3 text-sm text-muted-foreground">Tap to expand ride details</div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+            <div className="flex items-center gap-3 rounded-2xl border px-4 py-3">
+              <WeatherIcon iconKey={day.iconKey} className="h-10 w-10 text-foreground" />
+              <div className="text-5xl font-semibold leading-none">{day.overallGrade}</div>
+            </div>
+            {day.snowLikely && <Badge variant="destructive">Snow fail</Badge>}
+          </div>
+        </div>
+      </summary>
+
+      <div className="space-y-5 px-6 pb-6">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border p-4">
+            <div className="text-sm font-medium text-foreground">Daily precipitation</div>
+            <div className="mt-2 text-base font-semibold">{day.dailyPrecip.toFixed(1)} mm</div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {day.snowLikely ? "Snow signal present" : "No snow signal"}
+            </div>
+          </div>
+          <div className="rounded-2xl border p-4">
+            <div className="text-sm font-medium text-foreground">Temperature range</div>
+            <div className="mt-2 text-base font-semibold">
+              {day.tempMin.toFixed(0)}° to {day.tempMax.toFixed(0)}°C
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              Baseline {day.baselineTemp.toFixed(1)}°C
+            </div>
+          </div>
+          <div className="rounded-2xl border p-4">
+            <div className="text-sm font-medium text-foreground">Wind alerts</div>
+            <div className="mt-2 text-base font-semibold">
+              {day.windWarning ? "Wind warning active" : "No wind warning"}
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {day.windWarning ? "All ride grades downgraded one letter" : "No alert penalty"}
+            </div>
+          </div>
+          <div className="rounded-2xl border p-4">
+            <div className="text-sm font-medium text-foreground">Ice / salt risk</div>
+            <div className="mt-2 text-base font-semibold">
+              {day.surfaceHazardRisk.likely ? "Likely" : "Unlikely"}
+            </div>
+            <div className="mt-1 text-sm text-muted-foreground">
+              {day.surfaceHazardRisk.likely ? `${day.surfaceHazardRisk.confidence} confidence` : "No fail trigger"}
+            </div>
+          </div>
+        </div>
+
+        {day.surfaceHazardRisk.likely && (
+          <Alert className="rounded-2xl">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Fail due to likely ice or road salt</AlertTitle>
+            <AlertDescription>
+              {day.surfaceHazardRisk.reasons.join("; ")}. This is a conservative forecast-based proxy
+              for hazardous road-surface conditions, not a live municipal operations feed.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          {day.windows.map((window: any) => (
+            <div key={window.key} className="rounded-2xl border p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium">{window.label}</div>
+                  <div className="text-sm text-muted-foreground">{window.timeText}</div>
+                  <div className="mt-1 text-sm text-muted-foreground">{window.iconLabel}</div>
+                </div>
+                <div className="flex items-center gap-3 rounded-2xl border px-3 py-2">
+                  <WeatherIcon iconKey={window.iconKey} className="h-8 w-8 text-foreground" />
+                  <div className="text-3xl font-semibold leading-none">{window.grade}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="rounded-2xl border bg-muted/30 p-3">
+                  <div className="text-sm text-muted-foreground">Precipitation</div>
+                  <div className="mt-1 font-medium">{window.precipGrade}</div>
+                  <div className="mt-1 text-sm text-muted-foreground">{window.precipSummary}</div>
+                </div>
+                <div className="rounded-2xl border bg-muted/30 p-3">
+                  <div className="text-sm text-muted-foreground">Temperature</div>
+                  <div className="mt-1 font-medium">{window.tempGrade}</div>
+                  <div className="mt-1 text-sm text-muted-foreground">{window.tempSummary}</div>
+                </div>
+              </div>
+
+              {window.penalties.length > 0 && (
+                <div className="mt-3 text-sm text-muted-foreground">
+                  Penalties: {window.penalties.join(", ")}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {day.alertTitles.length > 0 && (
+          <div className="text-sm text-muted-foreground">Alerts considered: {day.alertTitles.join(", ")}</div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export default function RideDayGraderApp() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [locationQuery, setLocationQuery] = useState(DEFAULT_LOCATION.name);
@@ -530,6 +701,7 @@ export default function RideDayGraderApp() {
         "temperature_2m",
         "precipitation",
         "snowfall",
+        "cloud_cover",
         "relative_humidity_2m",
         "is_day",
       ].join(","),
@@ -660,6 +832,7 @@ export default function RideDayGraderApp() {
       const overnightRows = getOvernightRows(byDate, dailyRow.dateStr);
       const morningHazardRows = dayRows.filter((row: any) => row.hour <= 9);
       const surfaceHazardRisk = inferSurfaceHazardRisk(overnightRows, morningHazardRows);
+      const dayIcon = getWeatherIcon(dayRows);
       const snowLikely = dailyRow.snowfallSum > 0 || dayRows.some((row: any) => row.snowfall > 0);
       const baselineTemp = (dailyRow.temperatureMin + dailyRow.temperatureMax) / 2;
       const dayPrecipPerHour = dayRows.length
@@ -668,6 +841,7 @@ export default function RideDayGraderApp() {
 
       const windows = getRideWindows(dailyRow.dateStr, settings).map((window) => {
         const rows = getWindowRows(dayRows, window.startHour, window.endHour);
+        const windowIcon = getWeatherIcon(rows.length ? rows : dayRows);
         const avgTemp = rows.length
           ? rows.reduce((sum: number, row: any) => sum + row.temperature_2m, 0) / rows.length
           : baselineTemp;
@@ -698,6 +872,8 @@ export default function RideDayGraderApp() {
           key: window.key,
           label: window.label,
           grade: windowHasSnow ? "F" : penalized.grade,
+          iconKey: windowIcon.key,
+          iconLabel: windowIcon.label,
           precipGrade: adjustedPrecipGrade,
           tempGrade: adjustedTempGrade,
           avgTemp,
@@ -716,6 +892,8 @@ export default function RideDayGraderApp() {
         label: formatDisplayDate(dailyRow.dateStr, forecast.timezone),
         summary: summarizeDay(overallGrade),
         overallGrade,
+        iconKey: dayIcon.key,
+        iconLabel: dayIcon.label,
         windows,
         snowLikely,
         surfaceHazardRisk,
@@ -808,14 +986,21 @@ export default function RideDayGraderApp() {
               {today ? (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm text-muted-foreground">{today.label}</div>
-                      <div className="text-4xl font-semibold tracking-tight">{today.overallGrade}</div>
+                    <div className="flex items-center gap-4">
+                      <div className="rounded-2xl border bg-muted/30 p-3">
+                        <WeatherIcon iconKey={today.iconKey} className="h-9 w-9 text-foreground" />
+                      </div>
+                      <div>
+                        <div className="text-sm text-muted-foreground">{today.label}</div>
+                        <div className="text-sm text-muted-foreground">{today.iconLabel}</div>
+                      </div>
                     </div>
-                    <Badge variant={gradeTone(today.overallGrade)} className="px-3 py-1 text-sm">
-                      {today.summary}
-                    </Badge>
+                    <div className="flex items-center gap-3 rounded-2xl border px-4 py-3">
+                      <WeatherIcon iconKey={today.iconKey} className="h-10 w-10 text-foreground" />
+                      <div className="text-5xl font-semibold leading-none">{today.overallGrade}</div>
+                    </div>
                   </div>
+                  <div className="text-sm text-muted-foreground">{today.summary}</div>
 
                   {today.surfaceHazardRisk?.likely && (
                     <Alert className="rounded-2xl">
@@ -836,8 +1021,12 @@ export default function RideDayGraderApp() {
                         <div>
                           <div className="font-medium">{window.label}</div>
                           <div className="text-sm text-muted-foreground">{window.timeText}</div>
+                          <div className="text-sm text-muted-foreground">{window.iconLabel}</div>
                         </div>
-                        <Badge variant={gradeTone(window.grade)}>{window.grade}</Badge>
+                        <div className="flex items-center gap-3 rounded-2xl border px-3 py-2">
+                          <WeatherIcon iconKey={window.iconKey} className="h-7 w-7 text-foreground" />
+                          <div className="text-3xl font-semibold leading-none">{window.grade}</div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -851,7 +1040,7 @@ export default function RideDayGraderApp() {
 
         <div className="grid gap-6">
           {gradedDays.map((day: any) => (
-            <DayCard key={day.label} day={day} timezone={forecast?.timezone || location.timezone} />
+            <DayCard key={day.label} day={day} />
           ))}
         </div>
 
@@ -867,7 +1056,7 @@ export default function RideDayGraderApp() {
             </div>
           </summary>
           <div className="px-6 pb-6">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 text-sm text-muted-foreground">
+            <div className="grid gap-4 text-sm text-muted-foreground md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border p-4">
                 <div className="font-medium text-foreground">Precipitation</div>
                 <div className="mt-2">
