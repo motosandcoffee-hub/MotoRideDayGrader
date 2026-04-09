@@ -572,7 +572,7 @@ export default function RideDayGraderApp() {
           <div className="card">
             <div className="card-inner">
               <div className="iconline muted">
-                <img src="/app-icon.svg" alt="Ride Day Grader" width="20" height="20" style={{ borderRadius: 4 }} />
+                <img src="/icon-192.png" alt="Ride Day Grader" width="20" height="20" style={{ borderRadius: 4 }} />
                 {location.name}
               </div>
 
