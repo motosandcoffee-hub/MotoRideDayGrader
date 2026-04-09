@@ -646,8 +646,6 @@ export default function RideDayGraderApp() {
 
           <SettingsPanel settings={settings} onSettingsChange={setSettings} />
         </div>
-
-        <footer>Current source-of-truth package with expandable day cards and at-a-glance weather icons.</footer>
       </div>
     </main>
   );
