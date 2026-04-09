@@ -11,7 +11,7 @@ export const metadata: Metadata = {
     title: "Ride Day Grader"
   },
   icons: {
-    icon: "/icon-192.png",
+    icon: "/app-icon.svg",
     apple: "/apple-touch-icon.png"
   }
 };
