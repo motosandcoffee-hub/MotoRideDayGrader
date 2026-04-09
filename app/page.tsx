@@ -7,7 +7,7 @@ import { DEFAULT_LOCATION, DEFAULT_SETTINGS, geocodeLocation } from "@/lib/weath
 
 const STORAGE_KEY = "ride-day-grader-settings-v1";
 
-type IconKey = "sun" | "partly-cloudy" | "cloud" | "drizzle" | "rain" | "snow";
+type IconKey = "sun" | "partly-cloudy" | "cloud" | "drizzle" | "rain" | "snow" | "ice";
 
 function readStoredSettings() {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
@@ -127,6 +127,19 @@ function WeatherIcon({ kind, size = 28 }: { kind: IconKey; size?: number }) {
     );
   }
 
+  if (kind === "ice") {
+    return (
+      <svg {...props}>
+        <path d="M12 3.5v17" />
+        <path d="M5.7 7.2 18.3 16.8" />
+        <path d="M18.3 7.2 5.7 16.8" />
+        <path d="M12 3.5 9.8 5.7M12 3.5l2.2 2.2M12 20.5l-2.2-2.2M12 20.5l2.2-2.2" />
+        <path d="M5.7 7.2 6 10.3M5.7 7.2l3 .6M18.3 16.8l-3-.6M18.3 16.8l-.3-3.1" />
+        <path d="M18.3 7.2l-3 .6M18.3 7.2l-.3 3.1M5.7 16.8l3-.6M5.7 16.8l.3-3.1" />
+      </svg>
+    );
+  }
+
   return (
     <svg {...props}>
       <path d="M7.5 14.9h9.1a3.7 3.7 0 0 0 .4-7.4 5.6 5.6 0 0 0-10.7-.9 3.7 3.7 0 0 0 1.2 8.3Z" />
@@ -143,9 +156,14 @@ function getWeatherVisual(rows: any[]): { kind: IconKey; label: string } {
   const totalPrecip = rows.reduce((sum, row) => sum + (row.precipitation ?? 0), 0);
   const maxPrecip = Math.max(...rows.map((row) => row.precipitation ?? 0));
   const avgCloud = rows.reduce((sum, row) => sum + (row.cloud_cover ?? 0), 0) / rows.length;
+  const minTemp = Math.min(...rows.map((row) => row.temperature_2m ?? 99));
+  const maxHumidity = Math.max(...rows.map((row) => row.relative_humidity_2m ?? 0));
   const anyDaylight = rows.some((row) => row.is_day === 1);
 
   if (totalSnow > 0) return { kind: "snow", label: "Snow" };
+  if (minTemp <= 0 && (totalPrecip >= 0.1 || maxPrecip > 0.05 || maxHumidity >= 90)) {
+    return { kind: "ice", label: "Icy risk" };
+  }
   if (totalPrecip >= 2 || maxPrecip >= 1) return { kind: "rain", label: "Rain" };
   if (totalPrecip >= 0.1 || maxPrecip > 0.05) return { kind: "drizzle", label: "Light precipitation" };
   if (avgCloud >= 70) return { kind: "cloud", label: "Cloudy" };
@@ -158,9 +176,11 @@ function buildWeatherPresentation(forecast: any, settings: typeof DEFAULT_SETTIN
     time,
     dateKey: getLocalDateKey(time, forecast.timezone),
     hour: getLocalHour(time, forecast.timezone),
+    temperature_2m: forecast.hourly.temperature_2m?.[index] ?? 0,
     precipitation: forecast.hourly.precipitation?.[index] ?? 0,
     snowfall: forecast.hourly.snowfall?.[index] ?? 0,
     cloud_cover: forecast.hourly.cloud_cover?.[index] ?? 0,
+    relative_humidity_2m: forecast.hourly.relative_humidity_2m?.[index] ?? 0,
     is_day: forecast.hourly.is_day?.[index] ?? 1
   }));
 
@@ -301,21 +321,7 @@ function DayCard({ day }: { day: any }) {
     <details className="cardish bottom-spacing">
       <summary>
         <div className="row space-between wrap" style={{ alignItems: "flex-start", gap: 16 }}>
-          <div className="row wrap" style={{ alignItems: "center", gap: 14 }}>
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 54,
-                height: 54,
-                borderRadius: 16,
-                border: "1px solid var(--border)",
-                background: "rgba(24, 33, 45, 0.95)"
-              }}
-            >
-              <WeatherIcon kind={day.iconKind} size={30} />
-            </div>
+          <div>
             <div>
               <div className="summary-title" style={{ fontSize: 28 }}>{day.label}</div>
               <div className="muted spacer-4">{day.iconLabel}</div>
