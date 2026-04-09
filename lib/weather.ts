@@ -45,7 +45,7 @@ export async function fetchRideForecast(location: LocationInput) {
     timezone: location.timezone,
     forecast_days: "7",
     models: "gem_global",
-    hourly: ["temperature_2m", "precipitation", "snowfall", "relative_humidity_2m", "is_day"].join(","),
+    hourly: ["temperature_2m", "precipitation", "snowfall", "cloud_cover", "relative_humidity_2m", "is_day"].join(","),
     daily: ["temperature_2m_min", "temperature_2m_max", "precipitation_sum", "snowfall_sum", "sunrise", "sunset"].join(",")
   });
 
