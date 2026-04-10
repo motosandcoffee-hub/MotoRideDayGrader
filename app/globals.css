@@ -178,6 +178,36 @@ button:disabled {
   margin-top: 20px;
 }
 
+.grade-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.grade-card-copy {
+  min-width: 0;
+}
+
+.grade-card-visual {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+@media (max-width: 420px) {
+  .grade-card-header {
+    grid-template-columns: 1fr;
+  }
+
+  .grade-card-visual {
+    grid-row: 1;
+    justify-content: flex-start;
+  }
+}
+
 .window-grid {
   display: grid;
   gap: 14px;

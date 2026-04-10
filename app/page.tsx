@@ -287,13 +287,15 @@ function TodayCard({ today }: { today: any | null }) {
 
         {today ? (
           <div className="spacer-16">
-            <div className="row space-between wrap" style={{ alignItems: "flex-start" }}>
-              <div>
+            <div className="grade-card-header">
+              <div className="grade-card-copy">
                 <div className="muted">{today.label}</div>
                 <div className="muted spacer-4">{today.iconLabel}</div>
                 <div className="muted spacer-8">{today.summary}</div>
               </div>
-              <GradeVisual grade={today.overallGrade} iconKind={today.iconKind} size="large" />
+              <div className="grade-card-visual">
+                <GradeVisual grade={today.overallGrade} iconKind={today.iconKind} size="large" />
+              </div>
             </div>
 
             {today.surfaceHazardRisk?.likely && (
@@ -330,8 +332,8 @@ function DayCard({ day }: { day: any }) {
   return (
     <details className="cardish bottom-spacing">
       <summary>
-        <div className="row space-between wrap" style={{ alignItems: "flex-start", gap: 16 }}>
-          <div>
+        <div className="grade-card-header">
+          <div className="grade-card-copy">
             <div>
               <div className="summary-title" style={{ fontSize: 28 }}>{day.label}</div>
               <div className="muted spacer-4">{day.iconLabel}</div>
@@ -340,7 +342,7 @@ function DayCard({ day }: { day: any }) {
             </div>
           </div>
 
-          <div className="row wrap" style={{ justifyContent: "flex-end", gap: 10 }}>
+          <div className="grade-card-visual">
             <GradeVisual grade={day.overallGrade} iconKind={day.iconKind} size="large" />
             {day.snowLikely && <span className="badge bad">Snow fail</span>}
           </div>
