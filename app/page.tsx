@@ -291,9 +291,7 @@ function TodayCard({ today }: { today: any | null }) {
               <div>
                 <div className="muted">{today.label}</div>
                 <div className="muted spacer-4">{today.iconLabel}</div>
-                <div className="spacer-8">
-                  <GradeBadge grade={today.overallGrade} label={today.summary} />
-                </div>
+                <div className="muted spacer-8">{today.summary}</div>
               </div>
               <GradeVisual grade={today.overallGrade} iconKind={today.iconKind} size="large" />
             </div>
