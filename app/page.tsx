@@ -239,11 +239,11 @@ function GradeBadge({ grade, label }: { grade: string; label?: string }) {
 function gradeVisualPalette(grade: string) {
   const letter = grade.trim().toUpperCase().charAt(0);
 
-  if (letter === "A") return { background: "#1f8f4d", borderColor: "#35b96d", color: "#f5fff8" };
-  if (letter === "B") return { background: "#9acd32", borderColor: "#c4ee5c", color: "#132000" };
-  if (letter === "C") return { background: "#f3d547", borderColor: "#ffe878", color: "#181500" };
-  if (letter === "D") return { background: "#ef8a24", borderColor: "#ffad55", color: "#1c0e00" };
-  return { background: "#c83232", borderColor: "#ee5a5a", color: "#fff7f7" };
+  if (letter === "A") return { background: "#1f8f4d", borderColor: "#35b96d" };
+  if (letter === "B") return { background: "#9acd32", borderColor: "#c4ee5c" };
+  if (letter === "C") return { background: "#f3d547", borderColor: "#ffe878" };
+  if (letter === "D") return { background: "#ef8a24", borderColor: "#ffad55" };
+  return { background: "#c83232", borderColor: "#ee5a5a" };
 }
 
 function GradeVisual({
@@ -269,7 +269,7 @@ function GradeVisual({
         borderRadius: 18,
         border: `1px solid ${palette.borderColor}`,
         background: palette.background,
-        color: palette.color
+        color: "#111827"
       }}
     >
       <WeatherIcon kind={iconKind} size={iconSize} />
