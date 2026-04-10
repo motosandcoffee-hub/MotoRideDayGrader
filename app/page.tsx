@@ -68,7 +68,7 @@ function getRideWindows(dateStr: string, settings: typeof DEFAULT_SETTINGS) {
 }
 
 function WeatherIcon({ kind, size = 28 }: { kind: IconKey; size?: number }) {
-  const stroke = "#d7e6f8";
+  const stroke = "currentColor";
   const fill = "none";
   const props = {
     width: size,
@@ -236,6 +236,16 @@ function GradeBadge({ grade, label }: { grade: string; label?: string }) {
   return <span className={`badge ${tone}`}>{label ?? grade}</span>;
 }
 
+function gradeVisualPalette(grade: string) {
+  const letter = grade.trim().toUpperCase().charAt(0);
+
+  if (letter === "A") return { background: "#1f8f4d", borderColor: "#35b96d", color: "#f5fff8" };
+  if (letter === "B") return { background: "#9acd32", borderColor: "#c4ee5c", color: "#132000" };
+  if (letter === "C") return { background: "#f3d547", borderColor: "#ffe878", color: "#181500" };
+  if (letter === "D") return { background: "#ef8a24", borderColor: "#ffad55", color: "#1c0e00" };
+  return { background: "#c83232", borderColor: "#ee5a5a", color: "#fff7f7" };
+}
+
 function GradeVisual({
   grade,
   iconKind,
@@ -247,6 +257,7 @@ function GradeVisual({
 }) {
   const iconSize = size === "large" ? 34 : 26;
   const gradeSize = size === "large" ? 42 : 30;
+  const palette = gradeVisualPalette(grade);
 
   return (
     <div
@@ -256,12 +267,13 @@ function GradeVisual({
         gap: 12,
         padding: size === "large" ? "12px 14px" : "10px 12px",
         borderRadius: 18,
-        border: "1px solid var(--border)",
-        background: "rgba(24, 33, 45, 0.95)"
+        border: `1px solid ${palette.borderColor}`,
+        background: palette.background,
+        color: palette.color
       }}
     >
       <WeatherIcon kind={iconKind} size={iconSize} />
-      <div style={{ fontSize: gradeSize, fontWeight: 700, lineHeight: 1, letterSpacing: -1 }}>{grade}</div>
+      <div style={{ fontSize: gradeSize, fontWeight: 700, lineHeight: 1, letterSpacing: 0 }}>{grade}</div>
     </div>
   );
 }
