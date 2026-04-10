@@ -291,6 +291,8 @@ function GradeVisual({
 }) {
   const iconSize = size === "large" ? 34 : 26;
   const gradeSize = size === "large" ? 42 : 30;
+  const gradeTextWidth = size === "large" ? 60 : 44;
+  const visualWidth = size === "large" ? 136 : 108;
   const palette = gradeVisualPalette(grade);
 
   return (
@@ -298,7 +300,9 @@ function GradeVisual({
       style={{
         display: "inline-flex",
         alignItems: "center",
+        justifyContent: "center",
         gap: 12,
+        width: visualWidth,
         padding: size === "large" ? "12px 14px" : "10px 12px",
         borderRadius: 18,
         border: `1px solid ${palette.borderColor}`,
@@ -307,7 +311,7 @@ function GradeVisual({
       }}
     >
       <WeatherIcon kind={iconKind} size={iconSize} />
-      <div style={{ fontSize: gradeSize, fontWeight: 700, lineHeight: 1, letterSpacing: 0 }}>{grade}</div>
+      <div style={{ width: gradeTextWidth, textAlign: "center", fontSize: gradeSize, fontWeight: 700, lineHeight: 1, letterSpacing: 0 }}>{grade}</div>
     </div>
   );
 }
