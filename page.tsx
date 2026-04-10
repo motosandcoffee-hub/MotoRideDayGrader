@@ -236,11 +236,11 @@ function ScoringModelPanel() {
       <div className="small-grid">
         <div className="metric-card">
           <div className="title">Precipitation</div>
-          <div className="note">Snow = F. No rain = A. Very light rain = B. Moderate rain = C. Heavy rain = D. Ride-window rain can shift by half a grade.</div>
+          <div className="note">Snow = F. 0 mm rain = A+. Trace rain = A. Very light rain = B. Moderate rain = C. Heavy rain = D. Ride-window rain can shift by half a grade.</div>
         </div>
         <div className="metric-card">
           <div className="title">Temperature</div>
-          <div className="note">20–30°C = A. Above 30°C = B. 10–19°C = B. 5–9°C = C. Below 5°C = D. Ride-window temperature can shift by half a grade.</div>
+          <div className="note">20–27°C = A+. 28–30°C and 15–19°C = A. 10–14°C = B+. 5–9°C = B. 3–4°C and 31–35°C = C. 36°C+ or below 3°C = D. Above 40°C = F.</div>
         </div>
         <div className="metric-card">
           <div className="title">Penalties</div>

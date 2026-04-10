@@ -88,6 +88,7 @@ function precipitationBand(mm: number) {
 
 function precipitationGrade(mm: number, hasSnow: boolean): Grade {
   if (hasSnow) return "F";
+  if (mm <= 0) return "A+";
   if (mm <= 0.05) return "A";
   if (mm <= 0.6) return "B";
   if (mm <= 3) return "C";
@@ -95,18 +96,27 @@ function precipitationGrade(mm: number, hasSnow: boolean): Grade {
 }
 
 function temperatureBand(tempC: number) {
-  if (tempC < 5) return 0;
-  if (tempC <= 9) return 1;
-  if (tempC <= 19) return 2;
-  if (tempC <= 30) return 3;
-  return 4;
+  if (tempC < 3) return 0;
+  if (tempC <= 4) return 1;
+  if (tempC <= 9) return 2;
+  if (tempC <= 14) return 3;
+  if (tempC <= 19) return 4;
+  if (tempC <= 27) return 5;
+  if (tempC <= 30) return 6;
+  if (tempC <= 35) return 7;
+  return 8;
 }
 
 function temperatureGrade(tempC: number): Grade {
-  if (tempC > 30) return "B";
-  if (tempC >= 20) return "A";
-  if (tempC >= 10) return "B";
-  if (tempC >= 5) return "C";
+  if (tempC > 40) return "F";
+  if (tempC >= 36) return "D";
+  if (tempC >= 31) return "C";
+  if (tempC >= 28) return "A";
+  if (tempC >= 20) return "A+";
+  if (tempC >= 15) return "A";
+  if (tempC >= 10) return "B+";
+  if (tempC >= 5) return "B";
+  if (tempC >= 3) return "C";
   return "D";
 }
 
@@ -279,6 +289,7 @@ export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideS
     const morningHazardRows = dayRows.filter((row: any) => row.hour <= 9);
     const surfaceHazardRisk = inferSurfaceHazardRisk(overnightRows, morningHazardRows);
     const snowLikely = dailyRow.snowfallSum > 0 || dayRows.some((row: any) => row.snowfall > 0);
+    const heatFailLikely = dailyRow.temperatureMax > 40 || dayRows.some((row: any) => row.temperature_2m > 40);
     const baselineTemp = (dailyRow.temperatureMin + dailyRow.temperatureMax) / 2;
     const dayPrecipPerHour = dayRows.length ? dailyRow.precipitationSum / dayRows.length : dailyRow.precipitationSum;
 
@@ -288,6 +299,7 @@ export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideS
       const totalPrecip = rows.reduce((sum: number, row: any) => sum + row.precipitation, 0);
       const precipPerHour = rows.length ? totalPrecip / rows.length : dayPrecipPerHour;
       const windowHasSnow = snowLikely || rows.some((row: any) => row.snowfall > 0);
+      const windowHeatFail = avgTemp > 40 || rows.some((row: any) => row.temperature_2m > 40);
 
       const adjustedPrecipGrade = adjustPrecipitationGrade(
         precipitationGrade(dailyRow.precipitationSum, windowHasSnow),
@@ -303,12 +315,16 @@ export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideS
       return {
         key: window.key,
         label: window.label,
-        grade: windowHasSnow ? "F" : penalized.grade,
+        grade: windowHasSnow || windowHeatFail ? "F" : penalized.grade,
         precipGrade: adjustedPrecipGrade,
         tempGrade: adjustedTempGrade,
         avgTemp,
         totalPrecip,
-        penalties: windowHasSnow ? [...penalized.penalties, "snow"] : penalized.penalties,
+        penalties: [
+          ...penalized.penalties,
+          ...(windowHasSnow ? ["snow"] : []),
+          ...(windowHeatFail ? ["heat"] : [])
+        ],
         timeText: `${formatTime(window.startHour)}–${formatTime(window.endHour)}`,
         precipSummary: `${totalPrecip.toFixed(1)} mm in window`,
         tempSummary: `${avgTemp.toFixed(1)}°C average`
@@ -316,7 +332,7 @@ export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideS
     });
 
     let overallGrade = averageGrades(windows.map((window) => window.grade));
-    if (snowLikely || surfaceHazardRisk.likely) overallGrade = "F";
+    if (snowLikely || surfaceHazardRisk.likely || heatFailLikely) overallGrade = "F";
 
     return {
       label: formatDisplayDate(dailyRow.dateStr, forecast.timezone),
