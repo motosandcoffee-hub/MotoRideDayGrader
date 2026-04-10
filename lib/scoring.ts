@@ -1,4 +1,5 @@
-import type { DayResult, Grade, RideSettings } from "@/lib/types";
+import type { DayResult, Grade, PrecipitationGradeRange, RideSettings, ScoringModel, TemperatureGradeRange } from "@/lib/types";
+import { DEFAULT_SCORING_MODEL } from "@/lib/weather";
 
 const GRADE_STEPS: Grade[] = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"];
 const GRADE_INDEX = Object.fromEntries(GRADE_STEPS.map((grade, index) => [grade, index])) as Record<Grade, number>;
@@ -79,59 +80,59 @@ function getRideWindows(dateStr: string, settings: RideSettings) {
   ];
 }
 
-function precipitationBand(mm: number) {
-  if (mm <= 0.05) return 0;
-  if (mm <= 0.6) return 1;
-  if (mm <= 3) return 2;
-  return 3;
+function getScoringModel(settings: RideSettings): ScoringModel {
+  return settings.scoringModel ?? DEFAULT_SCORING_MODEL;
 }
 
-function precipitationGrade(mm: number, hasSnow: boolean): Grade {
+function getPrecipitationRanges(model: ScoringModel): PrecipitationGradeRange[] {
+  return model.precipitation?.length ? model.precipitation : DEFAULT_SCORING_MODEL.precipitation;
+}
+
+function getTemperatureRanges(model: ScoringModel): TemperatureGradeRange[] {
+  return model.temperature?.length ? model.temperature : DEFAULT_SCORING_MODEL.temperature;
+}
+
+function precipitationBand(mm: number, model: ScoringModel) {
+  const ranges = getPrecipitationRanges(model);
+  const index = ranges.findIndex((range) => mm <= range.maxMm);
+  return index >= 0 ? index : ranges.length - 1;
+}
+
+function precipitationGrade(mm: number, hasSnow: boolean, model: ScoringModel): Grade {
   if (hasSnow) return "F";
-  if (mm <= 0) return "A+";
-  if (mm <= 0.05) return "A";
-  if (mm <= 0.6) return "B";
-  if (mm <= 3) return "C";
-  return "D";
+  const ranges = getPrecipitationRanges(model);
+  return ranges[precipitationBand(mm, model)]?.grade ?? "D";
 }
 
-function temperatureBand(tempC: number) {
-  if (tempC < 3) return 0;
-  if (tempC <= 4) return 1;
-  if (tempC <= 9) return 2;
-  if (tempC <= 14) return 3;
-  if (tempC <= 19) return 4;
-  if (tempC <= 27) return 5;
-  if (tempC <= 30) return 6;
-  if (tempC <= 35) return 7;
-  return 8;
+function temperatureBand(tempC: number, model: ScoringModel) {
+  const ranges = getTemperatureRanges(model);
+  const index = ranges.findIndex((range) => tempC >= range.minC && tempC <= range.maxC);
+  if (index >= 0) return index;
+  if (tempC < ranges[0].minC) return 0;
+  return ranges.length - 1;
 }
 
-function temperatureGrade(tempC: number): Grade {
-  if (tempC > 40) return "F";
-  if (tempC >= 36) return "D";
-  if (tempC >= 31) return "C";
-  if (tempC >= 28) return "A";
-  if (tempC >= 20) return "A+";
-  if (tempC >= 15) return "A";
-  if (tempC >= 10) return "B+";
-  if (tempC >= 5) return "B";
-  if (tempC >= 3) return "C";
-  return "D";
+function temperatureGrade(tempC: number, model: ScoringModel): Grade {
+  const ranges = getTemperatureRanges(model);
+  return ranges[temperatureBand(tempC, model)]?.grade ?? "D";
 }
 
-function adjustPrecipitationGrade(dayGrade: Grade, dayMmPerHour: number, windowMmPerHour: number, hasSnow: boolean): Grade {
+function temperatureFailLikely(temps: number[], model: ScoringModel) {
+  return temps.some((temp) => temperatureGrade(temp, model) === "F");
+}
+
+function adjustPrecipitationGrade(dayGrade: Grade, dayMmPerHour: number, windowMmPerHour: number, hasSnow: boolean, model: ScoringModel): Grade {
   if (hasSnow) return "F";
-  const baseBand = precipitationBand(dayMmPerHour);
-  const windowBand = precipitationBand(windowMmPerHour);
+  const baseBand = precipitationBand(dayMmPerHour, model);
+  const windowBand = precipitationBand(windowMmPerHour, model);
   if (windowBand < baseBand) return shiftGrade(dayGrade, 1);
   if (windowBand > baseBand) return shiftGrade(dayGrade, -1);
   return dayGrade;
 }
 
-function adjustTemperatureGrade(dayGrade: Grade, baselineTemp: number, windowTemp: number): Grade {
-  const baseBand = temperatureBand(baselineTemp);
-  const windowBand = temperatureBand(windowTemp);
+function adjustTemperatureGrade(dayGrade: Grade, baselineTemp: number, windowTemp: number, model: ScoringModel): Grade {
+  const baseBand = temperatureBand(baselineTemp, model);
+  const windowBand = temperatureBand(windowTemp, model);
   if (windowBand > baseBand) return shiftGrade(dayGrade, 1);
   if (windowBand < baseBand) return shiftGrade(dayGrade, -1);
   return dayGrade;
@@ -259,6 +260,7 @@ export function gradeTone(grade: Grade) {
 }
 
 export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideSettings): DayResult[] {
+  const scoringModel = getScoringModel(settings);
   const hourlyRows = forecast.hourly.time.map((time: string, index: number) => ({
     time,
     dateKey: getLocalDateKey(time, forecast.timezone),
@@ -289,7 +291,10 @@ export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideS
     const morningHazardRows = dayRows.filter((row: any) => row.hour <= 9);
     const surfaceHazardRisk = inferSurfaceHazardRisk(overnightRows, morningHazardRows);
     const snowLikely = dailyRow.snowfallSum > 0 || dayRows.some((row: any) => row.snowfall > 0);
-    const heatFailLikely = dailyRow.temperatureMax > 40 || dayRows.some((row: any) => row.temperature_2m > 40);
+    const heatFailLikely = temperatureFailLikely(
+      [dailyRow.temperatureMin, dailyRow.temperatureMax, ...dayRows.map((row: any) => row.temperature_2m)],
+      scoringModel
+    );
     const baselineTemp = (dailyRow.temperatureMin + dailyRow.temperatureMax) / 2;
     const dayPrecipPerHour = dayRows.length ? dailyRow.precipitationSum / dayRows.length : dailyRow.precipitationSum;
 
@@ -299,15 +304,16 @@ export function buildDayResults(forecast: any, rawAlerts: any[], settings: RideS
       const totalPrecip = rows.reduce((sum: number, row: any) => sum + row.precipitation, 0);
       const precipPerHour = rows.length ? totalPrecip / rows.length : dayPrecipPerHour;
       const windowHasSnow = snowLikely || rows.some((row: any) => row.snowfall > 0);
-      const windowHeatFail = avgTemp > 40 || rows.some((row: any) => row.temperature_2m > 40);
+      const windowHeatFail = temperatureFailLikely([avgTemp, ...rows.map((row: any) => row.temperature_2m)], scoringModel);
 
       const adjustedPrecipGrade = adjustPrecipitationGrade(
-        precipitationGrade(dailyRow.precipitationSum, windowHasSnow),
+        precipitationGrade(dailyRow.precipitationSum, windowHasSnow, scoringModel),
         dayPrecipPerHour,
         precipPerHour,
-        windowHasSnow
+        windowHasSnow,
+        scoringModel
       );
-      const adjustedTempGrade = adjustTemperatureGrade(temperatureGrade(baselineTemp), baselineTemp, avgTemp);
+      const adjustedTempGrade = adjustTemperatureGrade(temperatureGrade(baselineTemp, scoringModel), baselineTemp, avgTemp, scoringModel);
       const baseWindowGrade = averageGrades([adjustedPrecipGrade, adjustedTempGrade]);
       const darkness = rows.some((row: any) => row.is_day !== 1);
       const penalized = applyPenalties(baseWindowGrade, { windWarning, darkness, surfaceHazardLikely: surfaceHazardRisk.likely });

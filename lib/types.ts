@@ -7,6 +7,22 @@ export interface LocationInput {
   timezone: string;
 }
 
+export interface PrecipitationGradeRange {
+  grade: Grade;
+  maxMm: number;
+}
+
+export interface TemperatureGradeRange {
+  grade: Grade;
+  minC: number;
+  maxC: number;
+}
+
+export interface ScoringModel {
+  precipitation: PrecipitationGradeRange[];
+  temperature: TemperatureGradeRange[];
+}
+
 export interface RideSettings {
   weekdayMorningStart: number;
   weekdayMorningEnd: number;
@@ -20,6 +36,7 @@ export interface RideSettings {
   weekendLateEnd: number;
   briefingHour: number;
   briefingMinute: number;
+  scoringModel: ScoringModel;
   savedLocation: LocationInput;
 }
 

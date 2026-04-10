@@ -1,10 +1,32 @@
-import type { LocationInput, RideSettings } from "@/lib/types";
+import type { LocationInput, RideSettings, ScoringModel } from "@/lib/types";
 
 export const DEFAULT_LOCATION: LocationInput = {
   name: "Delta, BC",
   latitude: 49.0847,
   longitude: -123.0586,
   timezone: "America/Vancouver"
+};
+
+export const DEFAULT_SCORING_MODEL: ScoringModel = {
+  precipitation: [
+    { grade: "A+", maxMm: 0 },
+    { grade: "A", maxMm: 0.05 },
+    { grade: "B", maxMm: 0.6 },
+    { grade: "C", maxMm: 3 },
+    { grade: "D", maxMm: 999 }
+  ],
+  temperature: [
+    { grade: "D", minC: -50, maxC: 2.9 },
+    { grade: "C", minC: 3, maxC: 4.9 },
+    { grade: "B", minC: 5, maxC: 9.9 },
+    { grade: "B+", minC: 10, maxC: 14.9 },
+    { grade: "A", minC: 15, maxC: 19.9 },
+    { grade: "A+", minC: 20, maxC: 27.9 },
+    { grade: "A", minC: 28, maxC: 30.9 },
+    { grade: "C", minC: 31, maxC: 35.9 },
+    { grade: "D", minC: 36, maxC: 40 },
+    { grade: "F", minC: 40.1, maxC: 60 }
+  ]
 };
 
 export const DEFAULT_SETTINGS: RideSettings = {
@@ -20,6 +42,7 @@ export const DEFAULT_SETTINGS: RideSettings = {
   weekendLateEnd: 19,
   briefingHour: 7,
   briefingMinute: 0,
+  scoringModel: DEFAULT_SCORING_MODEL,
   savedLocation: DEFAULT_LOCATION
 };
 

@@ -3,18 +3,52 @@
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { buildDayResults, gradeTone } from "@/lib/scoring";
-import { DEFAULT_LOCATION, DEFAULT_SETTINGS, geocodeLocation } from "@/lib/weather";
+import { DEFAULT_LOCATION, DEFAULT_SCORING_MODEL, DEFAULT_SETTINGS, geocodeLocation } from "@/lib/weather";
 
 const STORAGE_KEY = "ride-day-grader-settings-v1";
 
 type IconKey = "sun" | "partly-cloudy" | "cloud" | "drizzle" | "rain" | "snow" | "ice";
+
+function cloneScoringModel(model = DEFAULT_SCORING_MODEL) {
+  return {
+    precipitation: model.precipitation.map((range) => ({ ...range })),
+    temperature: model.temperature.map((range) => ({ ...range }))
+  };
+}
+
+function normalizeStoredSettings(rawSettings: Partial<typeof DEFAULT_SETTINGS>): typeof DEFAULT_SETTINGS {
+  const storedScoring = rawSettings.scoringModel;
+  const hasPrecipitationRanges = storedScoring?.precipitation?.length === DEFAULT_SCORING_MODEL.precipitation.length;
+  const hasTemperatureRanges = storedScoring?.temperature?.length === DEFAULT_SCORING_MODEL.temperature.length;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...rawSettings,
+    savedLocation: { ...DEFAULT_LOCATION, ...(rawSettings.savedLocation ?? {}) },
+    scoringModel: {
+      precipitation: hasPrecipitationRanges
+        ? storedScoring!.precipitation.map((range, index) => ({
+          grade: DEFAULT_SCORING_MODEL.precipitation[index].grade,
+          maxMm: Number.isFinite(range.maxMm) ? range.maxMm : DEFAULT_SCORING_MODEL.precipitation[index].maxMm
+        }))
+        : cloneScoringModel().precipitation,
+      temperature: hasTemperatureRanges
+        ? storedScoring!.temperature.map((range, index) => ({
+          grade: DEFAULT_SCORING_MODEL.temperature[index].grade,
+          minC: Number.isFinite(range.minC) ? range.minC : DEFAULT_SCORING_MODEL.temperature[index].minC,
+          maxC: Number.isFinite(range.maxC) ? range.maxC : DEFAULT_SCORING_MODEL.temperature[index].maxC
+        }))
+        : cloneScoringModel().temperature
+    }
+  };
+}
 
 function readStoredSettings() {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    return normalizeStoredSettings(JSON.parse(raw));
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -467,6 +501,133 @@ function SettingsPanel({
   );
 }
 
+function ScoringModelPanel({
+  settings,
+  onSettingsChange
+}: {
+  settings: typeof DEFAULT_SETTINGS;
+  onSettingsChange: (value: typeof DEFAULT_SETTINGS) => void;
+}) {
+  const updatePrecipitationRange = (index: number, maxMm: number) => {
+    const scoringModel = cloneScoringModel(settings.scoringModel);
+    scoringModel.precipitation[index] = {
+      ...scoringModel.precipitation[index],
+      maxMm
+    };
+    onSettingsChange({ ...settings, scoringModel });
+  };
+
+  const updateTemperatureRange = (index: number, key: "minC" | "maxC", value: number) => {
+    const scoringModel = cloneScoringModel(settings.scoringModel);
+    scoringModel.temperature[index] = {
+      ...scoringModel.temperature[index],
+      [key]: value
+    };
+    onSettingsChange({ ...settings, scoringModel });
+  };
+
+  return (
+    <DetailsCard
+      title="Scoring model"
+      subtitle="Adjust rain and temperature grades. Snow, ice, and road-salt fail rules stay fixed."
+    >
+      <div className="scoring-header">
+        <div>
+          <div className="summary-title">Grade tolerances</div>
+          <p className="muted spacer-4">Tune precipitation and temperature to match your comfort zone.</p>
+        </div>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onSettingsChange({ ...settings, scoringModel: cloneScoringModel() })}
+        >
+          Reset to defaults
+        </button>
+      </div>
+
+      <div className="scoring-grid spacer-16">
+        <div className="metric-card">
+          <div className="title">Precipitation</div>
+          <div className="note">Snow always remains an F. Ride-window rain can still shift by half a grade.</div>
+          <div className="range-stack spacer-12">
+            {settings.scoringModel.precipitation.map((range, index) => {
+              const isLast = index === settings.scoringModel.precipitation.length - 1;
+              const previousMax = settings.scoringModel.precipitation[index - 1]?.maxMm;
+              const label = isLast ? `Above ${previousMax} mm` : `Up to ${range.maxMm} mm`;
+
+              return (
+                <div className="range-row" key={`precip-${range.grade}-${index}`}>
+                  <div>
+                    <div className="range-grade">{range.grade}</div>
+                    <div className="muted">{label}</div>
+                  </div>
+                  {isLast ? (
+                    <div className="muted">and wetter</div>
+                  ) : (
+                    <label>
+                      <span className="label">Max mm</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={index === 0 ? 0.01 : 0.05}
+                        value={range.maxMm}
+                        onChange={(event) => updatePrecipitationRange(index, Number(event.target.value))}
+                      />
+                    </label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="metric-card">
+          <div className="title">Temperature</div>
+          <div className="note">Temperature F ranges are adjustable; road-surface ice and salt checks are not.</div>
+          <div className="range-stack spacer-12">
+            {settings.scoringModel.temperature.map((range, index) => (
+              <div className="range-row temp-range-row" key={`temp-${range.grade}-${index}`}>
+                <div>
+                  <div className="range-grade">{range.grade}</div>
+                  <div className="muted">{range.minC} to {range.maxC}°C</div>
+                </div>
+                <label>
+                  <span className="label">Min °C</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    value={range.minC}
+                    onChange={(event) => updateTemperatureRange(index, "minC", Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span className="label">Max °C</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    value={range.maxC}
+                    onChange={(event) => updateTemperatureRange(index, "maxC", Number(event.target.value))}
+                  />
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="metric-card">
+          <div className="title">Fixed penalties</div>
+          <div className="note">Wind warnings downgrade all ride grades one full letter. Darkness during a ride window downgrades that window one full letter.</div>
+        </div>
+
+        <div className="metric-card">
+          <div className="title">Road surface fail</div>
+          <div className="note">Near-freezing conditions plus precipitation, humidity, snow, or freeze-thaw timing can still trigger an ice or road-salt fail.</div>
+        </div>
+      </div>
+    </DetailsCard>
+  );
+}
+
 export default function RideDayGraderApp() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [locationQuery, setLocationQuery] = useState(DEFAULT_LOCATION.name);
@@ -632,29 +793,7 @@ export default function RideDayGraderApp() {
             <DayCard key={day.label} day={day} />
           ))}
 
-          <DetailsCard
-            title="Scoring model"
-            subtitle="Expand to review the grading and fail-trigger rules."
-          >
-            <div className="small-grid">
-              <div className="metric-card">
-                <div className="title">Precipitation</div>
-                <div className="note">Snow = F. 0 mm rain = A+. Trace rain = A. Very light rain = B. Moderate rain = C. Heavy rain = D. Ride-window rain can shift by half a grade.</div>
-              </div>
-              <div className="metric-card">
-                <div className="title">Temperature</div>
-                <div className="note">20–27°C = A+. 28–30°C and 15–19°C = A. 10–14°C = B+. 5–9°C = B. 3–4°C and 31–35°C = C. 36°C+ or below 3°C = D. Above 40°C = F.</div>
-              </div>
-              <div className="metric-card">
-                <div className="title">Penalties</div>
-                <div className="note">Wind warnings downgrade all ride grades one full letter. Darkness during a ride window downgrades that window one full letter.</div>
-              </div>
-              <div className="metric-card">
-                <div className="title">Road surface fail</div>
-                <div className="note">A conservative fail trigger based on near-freezing or freezing conditions plus precipitation, humidity, snow, or freeze-thaw timing that may indicate ice or road salt risk.</div>
-              </div>
-            </div>
-          </DetailsCard>
+          <ScoringModelPanel settings={settings} onSettingsChange={setSettings} />
 
           <SettingsPanel settings={settings} onSettingsChange={setSettings} />
         </div>
